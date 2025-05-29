@@ -1183,6 +1183,9 @@
   #
 !include OvmfPkg/Include/Dsc/OvmfTpmComponentsDxe.dsc.inc
 
+  DebugPkg/GdbSyms/GdbSyms.inf
+
+
   #
   # Smbios Measurement support
   #
