@@ -296,10 +296,14 @@ PartitionInstallGptChildHandles (
       DEBUG ((DEBUG_INFO, " Restore primary partition table by the backup\n"));
       if (!PartitionRestoreGptTable (BlockIo, DiskIo, BackupHeader)) {
         DEBUG ((DEBUG_INFO, " Restore primary partition table error\n"));
+        goto Done;
       }
 
       if (PartitionValidGptTable (BlockIo, DiskIo, BackupHeader->AlternateLBA, PrimaryHeader)) {
         DEBUG ((DEBUG_INFO, " Restore backup partition table success\n"));
+      } else {
+        DEBUG ((DEBUG_INFO, " Restored primary partition table is invalid\n"));
+        goto Done;
       }
     }
   } else if (!PartitionValidGptTable (BlockIo, DiskIo, PrimaryHeader->AlternateLBA, BackupHeader)) {
@@ -307,10 +311,14 @@ PartitionInstallGptChildHandles (
     DEBUG ((DEBUG_INFO, " Restore backup partition table by the primary\n"));
     if (!PartitionRestoreGptTable (BlockIo, DiskIo, PrimaryHeader)) {
       DEBUG ((DEBUG_INFO, " Restore backup partition table error\n"));
+      goto Done;
     }
 
     if (PartitionValidGptTable (BlockIo, DiskIo, PrimaryHeader->AlternateLBA, BackupHeader)) {
       DEBUG ((DEBUG_INFO, " Restore backup partition table success\n"));
+    } else {
+      DEBUG ((DEBUG_INFO, " Restored backup partition table is invalid\n"));
+      goto Done;
     }
   }
 
