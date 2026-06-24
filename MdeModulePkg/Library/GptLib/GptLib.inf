@@ -1,0 +1,28 @@
+## @file
+#  GUID Partition Table handling.
+#
+#  Copyright (c) 2026, SUSE LLC. All rights reserved.<BR>
+#  SPDX-License-Identifier: BSD-2-Clause-Patent
+##
+
+[Defines]
+  INF_VERSION    = 0x00010005
+  BASE_NAME      = GptLib
+  FILE_GUID      = 85A4B2F8-43D5-4D9D-9F28-D7BAA813EC93
+  MODULE_TYPE    = BASE
+  VERSION_STRING = 1.0
+  LIBRARY_CLASS  = GptLib
+
+[Sources]
+  GptLib.c
+
+[Packages]
+  MdePkg/MdePkg.dec
+  MdeModulePkg/MdeModulePkg.dec
+
+[LibraryClasses]
+  BaseLib
+  BaseMemoryLib
+  DebugLib
+  MemoryAllocationLib
+  SafeIntLib

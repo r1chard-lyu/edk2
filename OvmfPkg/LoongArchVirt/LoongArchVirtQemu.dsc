@@ -99,6 +99,7 @@
 !include MdePkg/MdeLibs.dsc.inc
 
 [LibraryClasses.common]
+  GptLib|MdeModulePkg/Library/GptLib/GptLib.inf
   PcdLib                           | MdePkg/Library/DxePcdLib/DxePcdLib.inf
   TimerLib                         | UefiCpuPkg/Library/CpuTimerLib/BaseCpuTimerLib.inf
   PrintLib                         | MdePkg/Library/BasePrintLib/BasePrintLib.inf
