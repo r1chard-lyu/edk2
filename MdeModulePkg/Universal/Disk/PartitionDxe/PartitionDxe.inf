@@ -39,6 +39,8 @@
   ComponentName.c
   Mbr.c
   Gpt.c
+  Gpt.h
+  GptRecovery.c
   ElTorito.c
   Udf.c
   Partition.c
@@ -47,6 +49,7 @@
 
 [Packages]
   MdePkg/MdePkg.dec
+  MdeModulePkg/MdeModulePkg.dec
 
 
 [LibraryClasses]
@@ -58,6 +61,7 @@
   BaseLib
   UefiDriverEntryPoint
   DebugLib
+  GptLib
 
 
 [Guids]

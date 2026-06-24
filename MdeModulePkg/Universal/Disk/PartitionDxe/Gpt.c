@@ -10,8 +10,7 @@
   PartitionInstallGptChildHandles() routine will read disk partition content and
   do basic validation before PartitionInstallChildHandle().
 
-  PartitionValidGptTable(), PartitionCheckGptEntry() routine will accept disk
-  partition content and validate the GPT table and GPT entry.
+  GptLib and PartitionCheckGptEntry() validate the GPT table and GPT entries.
 
 Copyright (c) 2018 Qualcomm Datacenter Technologies, Inc.
 Copyright (c) 2006 - 2019, Intel Corporation. All rights reserved.<BR>
@@ -20,68 +19,7 @@ SPDX-License-Identifier: BSD-2-Clause-Patent
 **/
 
 #include "Partition.h"
-
-/**
-  Install child handles if the Handle supports GPT partition structure.
-
-  Caution: This function may receive untrusted input.
-  The GPT partition table header is external input, so this routine
-  will do basic validation for GPT partition table header before return.
-
-  @param[in]  BlockIo     Parent BlockIo interface.
-  @param[in]  DiskIo      Disk Io protocol.
-  @param[in]  Lba         The starting Lba of the Partition Table
-  @param[out] PartHeader  Stores the partition table that is read
-
-  @retval TRUE      The partition table is valid
-  @retval FALSE     The partition table is not valid
-
-**/
-BOOLEAN
-PartitionValidGptTable (
-  IN  EFI_BLOCK_IO_PROTOCOL       *BlockIo,
-  IN  EFI_DISK_IO_PROTOCOL        *DiskIo,
-  IN  EFI_LBA                     Lba,
-  OUT EFI_PARTITION_TABLE_HEADER  *PartHeader
-  );
-
-/**
-  Check if the CRC field in the Partition table header is valid
-  for Partition entry array.
-
-  @param[in]  BlockIo     Parent BlockIo interface
-  @param[in]  DiskIo      Disk Io Protocol.
-  @param[in]  PartHeader  Partition table header structure
-
-  @retval TRUE      the CRC is valid
-  @retval FALSE     the CRC is invalid
-
-**/
-BOOLEAN
-PartitionCheckGptEntryArrayCRC (
-  IN  EFI_BLOCK_IO_PROTOCOL       *BlockIo,
-  IN  EFI_DISK_IO_PROTOCOL        *DiskIo,
-  IN  EFI_PARTITION_TABLE_HEADER  *PartHeader
-  );
-
-/**
-  Restore Partition Table to its alternate place
-  (Primary -> Backup or Backup -> Primary).
-
-  @param[in]  BlockIo     Parent BlockIo interface.
-  @param[in]  DiskIo      Disk Io Protocol.
-  @param[in]  PartHeader  Partition table header structure.
-
-  @retval TRUE      Restoring succeeds
-  @retval FALSE     Restoring failed
-
-**/
-BOOLEAN
-PartitionRestoreGptTable (
-  IN  EFI_BLOCK_IO_PROTOCOL       *BlockIo,
-  IN  EFI_DISK_IO_PROTOCOL        *DiskIo,
-  IN  EFI_PARTITION_TABLE_HEADER  *PartHeader
-  );
+#include "Gpt.h"
 
 /**
   This routine will check GPT partition entry and return entry status.
@@ -101,64 +39,6 @@ PartitionCheckGptEntry (
   IN  EFI_PARTITION_TABLE_HEADER  *PartHeader,
   IN  EFI_PARTITION_ENTRY         *PartEntry,
   OUT EFI_PARTITION_ENTRY_STATUS  *PEntryStatus
-  );
-
-/**
-  Checks the CRC32 value in the table header.
-
-  @param  MaxSize   Max Size limit
-  @param  Size      The size of the table
-  @param  Hdr       Table to check
-
-  @return TRUE    CRC Valid
-  @return FALSE   CRC Invalid
-
-**/
-BOOLEAN
-PartitionCheckCrcAltSize (
-  IN UINTN                 MaxSize,
-  IN UINTN                 Size,
-  IN OUT EFI_TABLE_HEADER  *Hdr
-  );
-
-/**
-  Checks the CRC32 value in the table header.
-
-  @param  MaxSize   Max Size limit
-  @param  Hdr       Table to check
-
-  @return TRUE      CRC Valid
-  @return FALSE     CRC Invalid
-
-**/
-BOOLEAN
-PartitionCheckCrc (
-  IN UINTN                 MaxSize,
-  IN OUT EFI_TABLE_HEADER  *Hdr
-  );
-
-/**
-  Updates the CRC32 value in the table header.
-
-  @param  Size   The size of the table
-  @param  Hdr    Table to update
-
-**/
-VOID
-PartitionSetCrcAltSize (
-  IN UINTN                 Size,
-  IN OUT EFI_TABLE_HEADER  *Hdr
-  );
-
-/**
-  Updates the CRC32 value in the table header.
-
-  @param  Hdr    Table to update
-
-**/
-VOID
-PartitionSetCrc (
-  IN OUT EFI_TABLE_HEADER  *Hdr
   );
 
 /**
@@ -196,157 +76,38 @@ PartitionInstallGptChildHandles (
   EFI_STATUS                   Status;
   UINT32                       BlockSize;
   EFI_LBA                      LastBlock;
-  MASTER_BOOT_RECORD           *ProtectiveMbr;
   EFI_PARTITION_TABLE_HEADER   *PrimaryHeader;
-  EFI_PARTITION_TABLE_HEADER   *BackupHeader;
   EFI_PARTITION_ENTRY          *PartEntry;
   EFI_PARTITION_ENTRY          *Entry;
   EFI_PARTITION_ENTRY_STATUS   *PEntryStatus;
   UINTN                        Index;
   EFI_STATUS                   GptValidStatus;
   HARDDRIVE_DEVICE_PATH        HdDev;
-  UINT32                       MediaId;
   EFI_PARTITION_INFO_PROTOCOL  PartitionInfo;
+  GPT_CANONICAL_VIEW           GptView;
 
-  ProtectiveMbr = NULL;
   PrimaryHeader = NULL;
-  BackupHeader  = NULL;
   PartEntry     = NULL;
   PEntryStatus  = NULL;
+  ZeroMem (&GptView, sizeof (GptView));
 
   BlockSize = BlockIo->Media->BlockSize;
   LastBlock = BlockIo->Media->LastBlock;
-  MediaId   = BlockIo->Media->MediaId;
 
   DEBUG ((DEBUG_INFO, " BlockSize : %d \n", BlockSize));
   DEBUG ((DEBUG_INFO, " LastBlock : %lx \n", LastBlock));
 
   GptValidStatus = EFI_NOT_FOUND;
 
-  //
-  // Ensure the block size can hold the MBR
-  //
-  if (BlockSize < sizeof (MASTER_BOOT_RECORD)) {
-    return EFI_NOT_FOUND;
-  }
-
-  //
-  // Allocate a buffer for the Protective MBR
-  //
-  ProtectiveMbr = AllocatePool (BlockSize);
-  if (ProtectiveMbr == NULL) {
-    return EFI_NOT_FOUND;
-  }
-
-  //
-  // Read the Protective MBR from LBA #0
-  //
-  Status = DiskIo->ReadDisk (
-                     DiskIo,
-                     MediaId,
-                     0,
-                     BlockSize,
-                     ProtectiveMbr
-                     );
+  Status = PartitionGetCanonicalGpt (BlockIo, DiskIo, &GptView);
   if (EFI_ERROR (Status)) {
     GptValidStatus = Status;
     goto Done;
   }
 
-  //
-  // Verify that the Protective MBR is valid
-  //
-  for (Index = 0; Index < MAX_MBR_PARTITIONS; Index++) {
-    if ((ProtectiveMbr->Partition[Index].OSIndicator == PMBR_GPT_PARTITION) &&
-        (UNPACK_UINT32 (ProtectiveMbr->Partition[Index].StartingLBA) == 1)
-        )
-    {
-      break;
-    }
-  }
-
-  if (Index == MAX_MBR_PARTITIONS) {
-    goto Done;
-  }
-
-  //
-  // Allocate the GPT structures
-  //
-  PrimaryHeader = AllocateZeroPool (sizeof (EFI_PARTITION_TABLE_HEADER));
-  if (PrimaryHeader == NULL) {
-    goto Done;
-  }
-
-  BackupHeader = AllocateZeroPool (sizeof (EFI_PARTITION_TABLE_HEADER));
-  if (BackupHeader == NULL) {
-    goto Done;
-  }
-
-  //
-  // Check primary and backup partition tables
-  //
-  if (!PartitionValidGptTable (BlockIo, DiskIo, PRIMARY_PART_HEADER_LBA, PrimaryHeader)) {
-    DEBUG ((DEBUG_INFO, " Not Valid primary partition table\n"));
-
-    if (!PartitionValidGptTable (BlockIo, DiskIo, LastBlock, BackupHeader)) {
-      DEBUG ((DEBUG_INFO, " Not Valid backup partition table\n"));
-      goto Done;
-    } else {
-      DEBUG ((DEBUG_INFO, " Valid backup partition table\n"));
-      DEBUG ((DEBUG_INFO, " Restore primary partition table by the backup\n"));
-      if (!PartitionRestoreGptTable (BlockIo, DiskIo, BackupHeader)) {
-        DEBUG ((DEBUG_INFO, " Restore primary partition table error\n"));
-        goto Done;
-      }
-
-      if (PartitionValidGptTable (BlockIo, DiskIo, BackupHeader->AlternateLBA, PrimaryHeader)) {
-        DEBUG ((DEBUG_INFO, " Restore backup partition table success\n"));
-      } else {
-        DEBUG ((DEBUG_INFO, " Restored primary partition table is invalid\n"));
-        goto Done;
-      }
-    }
-  } else if (!PartitionValidGptTable (BlockIo, DiskIo, PrimaryHeader->AlternateLBA, BackupHeader)) {
-    DEBUG ((DEBUG_INFO, " Valid primary and !Valid backup partition table\n"));
-    DEBUG ((DEBUG_INFO, " Restore backup partition table by the primary\n"));
-    if (!PartitionRestoreGptTable (BlockIo, DiskIo, PrimaryHeader)) {
-      DEBUG ((DEBUG_INFO, " Restore backup partition table error\n"));
-      goto Done;
-    }
-
-    if (PartitionValidGptTable (BlockIo, DiskIo, PrimaryHeader->AlternateLBA, BackupHeader)) {
-      DEBUG ((DEBUG_INFO, " Restore backup partition table success\n"));
-    } else {
-      DEBUG ((DEBUG_INFO, " Restored backup partition table is invalid\n"));
-      goto Done;
-    }
-  }
-
-  DEBUG ((DEBUG_INFO, " Valid primary and Valid backup partition table\n"));
-
-  //
-  // Read the EFI Partition Entries
-  //
-  PartEntry = AllocatePool (PrimaryHeader->NumberOfPartitionEntries * PrimaryHeader->SizeOfPartitionEntry);
-  if (PartEntry == NULL) {
-    DEBUG ((DEBUG_ERROR, "Allocate pool error\n"));
-    goto Done;
-  }
-
-  Status = DiskIo->ReadDisk (
-                     DiskIo,
-                     MediaId,
-                     MultU64x32 (PrimaryHeader->PartitionEntryLBA, BlockSize),
-                     PrimaryHeader->NumberOfPartitionEntries * (PrimaryHeader->SizeOfPartitionEntry),
-                     PartEntry
-                     );
-  if (EFI_ERROR (Status)) {
-    GptValidStatus = Status;
-    DEBUG ((DEBUG_ERROR, " Partition Entry ReadDisk error\n"));
-    goto Done;
-  }
-
-  DEBUG ((DEBUG_INFO, " Partition entries read block success\n"));
+  PrimaryHeader = &GptView.PrimaryHeader;
+  PartEntry     = (EFI_PARTITION_ENTRY *)GptView.PartitionEntries;
+  DEBUG ((DEBUG_INFO, " Valid canonical primary and backup GPT\n"));
 
   DEBUG ((DEBUG_INFO, " Number of partition entries: %d\n", PrimaryHeader->NumberOfPartitionEntries));
 
@@ -432,270 +193,12 @@ PartitionInstallGptChildHandles (
   DEBUG ((DEBUG_INFO, "Prepare to Free Pool\n"));
 
 Done:
-  if (ProtectiveMbr != NULL) {
-    FreePool (ProtectiveMbr);
-  }
-
-  if (PrimaryHeader != NULL) {
-    FreePool (PrimaryHeader);
-  }
-
-  if (BackupHeader != NULL) {
-    FreePool (BackupHeader);
-  }
-
-  if (PartEntry != NULL) {
-    FreePool (PartEntry);
-  }
-
   if (PEntryStatus != NULL) {
     FreePool (PEntryStatus);
   }
 
+  GptFreeCanonicalView (&GptView);
   return GptValidStatus;
-}
-
-/**
-  This routine will read GPT partition table header and return it.
-
-  Caution: This function may receive untrusted input.
-  The GPT partition table header is external input, so this routine
-  will do basic validation for GPT partition table header before return.
-
-  @param[in]  BlockIo     Parent BlockIo interface.
-  @param[in]  DiskIo      Disk Io protocol.
-  @param[in]  Lba         The starting Lba of the Partition Table
-  @param[out] PartHeader  Stores the partition table that is read
-
-  @retval TRUE      The partition table is valid
-  @retval FALSE     The partition table is not valid
-
-**/
-BOOLEAN
-PartitionValidGptTable (
-  IN  EFI_BLOCK_IO_PROTOCOL       *BlockIo,
-  IN  EFI_DISK_IO_PROTOCOL        *DiskIo,
-  IN  EFI_LBA                     Lba,
-  OUT EFI_PARTITION_TABLE_HEADER  *PartHeader
-  )
-{
-  EFI_STATUS                  Status;
-  UINT32                      BlockSize;
-  EFI_PARTITION_TABLE_HEADER  *PartHdr;
-  UINT32                      MediaId;
-
-  BlockSize = BlockIo->Media->BlockSize;
-  MediaId   = BlockIo->Media->MediaId;
-  PartHdr   = AllocateZeroPool (BlockSize);
-
-  if (PartHdr == NULL) {
-    DEBUG ((DEBUG_ERROR, "Allocate pool error\n"));
-    return FALSE;
-  }
-
-  //
-  // Read the EFI Partition Table Header
-  //
-  Status = DiskIo->ReadDisk (
-                     DiskIo,
-                     MediaId,
-                     MultU64x32 (Lba, BlockSize),
-                     BlockSize,
-                     PartHdr
-                     );
-  if (EFI_ERROR (Status)) {
-    FreePool (PartHdr);
-    return FALSE;
-  }
-
-  if ((PartHdr->Header.Signature != EFI_PTAB_HEADER_ID) ||
-      !PartitionCheckCrc (BlockSize, &PartHdr->Header) ||
-      (PartHdr->MyLBA != Lba) ||
-      (PartHdr->SizeOfPartitionEntry < sizeof (EFI_PARTITION_ENTRY))
-      )
-  {
-    DEBUG ((DEBUG_INFO, "Invalid efi partition table header\n"));
-    FreePool (PartHdr);
-    return FALSE;
-  }
-
-  //
-  // Ensure the NumberOfPartitionEntries * SizeOfPartitionEntry doesn't overflow.
-  //
-  if (PartHdr->NumberOfPartitionEntries > DivU64x32 (MAX_UINTN, PartHdr->SizeOfPartitionEntry)) {
-    FreePool (PartHdr);
-    return FALSE;
-  }
-
-  CopyMem (PartHeader, PartHdr, sizeof (EFI_PARTITION_TABLE_HEADER));
-  if (!PartitionCheckGptEntryArrayCRC (BlockIo, DiskIo, PartHeader)) {
-    FreePool (PartHdr);
-    return FALSE;
-  }
-
-  DEBUG ((DEBUG_INFO, " Valid efi partition table header\n"));
-  FreePool (PartHdr);
-  return TRUE;
-}
-
-/**
-  Check if the CRC field in the Partition table header is valid
-  for Partition entry array.
-
-  @param[in]  BlockIo     Parent BlockIo interface
-  @param[in]  DiskIo      Disk Io Protocol.
-  @param[in]  PartHeader  Partition table header structure
-
-  @retval TRUE      the CRC is valid
-  @retval FALSE     the CRC is invalid
-
-**/
-BOOLEAN
-PartitionCheckGptEntryArrayCRC (
-  IN  EFI_BLOCK_IO_PROTOCOL       *BlockIo,
-  IN  EFI_DISK_IO_PROTOCOL        *DiskIo,
-  IN  EFI_PARTITION_TABLE_HEADER  *PartHeader
-  )
-{
-  EFI_STATUS  Status;
-  UINT8       *Ptr;
-  UINT32      Crc;
-  UINTN       Size;
-
-  //
-  // Read the EFI Partition Entries
-  //
-  Ptr = AllocatePool (PartHeader->NumberOfPartitionEntries * PartHeader->SizeOfPartitionEntry);
-  if (Ptr == NULL) {
-    DEBUG ((DEBUG_ERROR, " Allocate pool error\n"));
-    return FALSE;
-  }
-
-  Status = DiskIo->ReadDisk (
-                     DiskIo,
-                     BlockIo->Media->MediaId,
-                     MultU64x32 (PartHeader->PartitionEntryLBA, BlockIo->Media->BlockSize),
-                     PartHeader->NumberOfPartitionEntries * PartHeader->SizeOfPartitionEntry,
-                     Ptr
-                     );
-  if (EFI_ERROR (Status)) {
-    FreePool (Ptr);
-    return FALSE;
-  }
-
-  Size = PartHeader->NumberOfPartitionEntries * PartHeader->SizeOfPartitionEntry;
-
-  Status = gBS->CalculateCrc32 (Ptr, Size, &Crc);
-  if (EFI_ERROR (Status)) {
-    DEBUG ((DEBUG_ERROR, "CheckPEntryArrayCRC: Crc calculation failed\n"));
-    FreePool (Ptr);
-    return FALSE;
-  }
-
-  FreePool (Ptr);
-
-  return (BOOLEAN)(PartHeader->PartitionEntryArrayCRC32 == Crc);
-}
-
-/**
-  Restore Partition Table to its alternate place
-  (Primary -> Backup or Backup -> Primary).
-
-  @param[in]  BlockIo     Parent BlockIo interface.
-  @param[in]  DiskIo      Disk Io Protocol.
-  @param[in]  PartHeader  Partition table header structure.
-
-  @retval TRUE      Restoring succeeds
-  @retval FALSE     Restoring failed
-
-**/
-BOOLEAN
-PartitionRestoreGptTable (
-  IN  EFI_BLOCK_IO_PROTOCOL       *BlockIo,
-  IN  EFI_DISK_IO_PROTOCOL        *DiskIo,
-  IN  EFI_PARTITION_TABLE_HEADER  *PartHeader
-  )
-{
-  EFI_STATUS                  Status;
-  UINTN                       BlockSize;
-  EFI_PARTITION_TABLE_HEADER  *PartHdr;
-  EFI_LBA                     PEntryLBA;
-  UINT8                       *Ptr;
-  UINT32                      MediaId;
-
-  PartHdr = NULL;
-  Ptr     = NULL;
-
-  BlockSize = BlockIo->Media->BlockSize;
-  MediaId   = BlockIo->Media->MediaId;
-
-  PartHdr = AllocateZeroPool (BlockSize);
-
-  if (PartHdr == NULL) {
-    DEBUG ((DEBUG_ERROR, "Allocate pool error\n"));
-    return FALSE;
-  }
-
-  PEntryLBA = (PartHeader->MyLBA == PRIMARY_PART_HEADER_LBA) ? \
-              (PartHeader->LastUsableLBA + 1) : \
-              (PRIMARY_PART_HEADER_LBA + 1);
-
-  CopyMem (PartHdr, PartHeader, sizeof (EFI_PARTITION_TABLE_HEADER));
-
-  PartHdr->MyLBA             = PartHeader->AlternateLBA;
-  PartHdr->AlternateLBA      = PartHeader->MyLBA;
-  PartHdr->PartitionEntryLBA = PEntryLBA;
-  PartitionSetCrc ((EFI_TABLE_HEADER *)PartHdr);
-
-  Status = DiskIo->WriteDisk (
-                     DiskIo,
-                     MediaId,
-                     MultU64x32 (PartHdr->MyLBA, (UINT32)BlockSize),
-                     BlockSize,
-                     PartHdr
-                     );
-  if (EFI_ERROR (Status)) {
-    goto Done;
-  }
-
-  Ptr = AllocatePool (PartHeader->NumberOfPartitionEntries * PartHeader->SizeOfPartitionEntry);
-  if (Ptr == NULL) {
-    DEBUG ((DEBUG_ERROR, " Allocate pool error\n"));
-    Status = EFI_OUT_OF_RESOURCES;
-    goto Done;
-  }
-
-  Status = DiskIo->ReadDisk (
-                     DiskIo,
-                     MediaId,
-                     MultU64x32 (PartHeader->PartitionEntryLBA, (UINT32)BlockSize),
-                     PartHeader->NumberOfPartitionEntries * PartHeader->SizeOfPartitionEntry,
-                     Ptr
-                     );
-  if (EFI_ERROR (Status)) {
-    goto Done;
-  }
-
-  Status = DiskIo->WriteDisk (
-                     DiskIo,
-                     MediaId,
-                     MultU64x32 (PEntryLBA, (UINT32)BlockSize),
-                     PartHeader->NumberOfPartitionEntries * PartHeader->SizeOfPartitionEntry,
-                     Ptr
-                     );
-
-Done:
-  FreePool (PartHdr);
-
-  if (Ptr != NULL) {
-    FreePool (Ptr);
-  }
-
-  if (EFI_ERROR (Status)) {
-    return FALSE;
-  }
-
-  return TRUE;
 }
 
 /**
@@ -769,123 +272,4 @@ PartitionCheckGptEntry (
   }
 
   DEBUG ((DEBUG_INFO, " End check partition entries\n"));
-}
-
-/**
-  Updates the CRC32 value in the table header.
-
-  @param  Hdr    Table to update
-
-**/
-VOID
-PartitionSetCrc (
-  IN OUT EFI_TABLE_HEADER  *Hdr
-  )
-{
-  PartitionSetCrcAltSize (Hdr->HeaderSize, Hdr);
-}
-
-/**
-  Updates the CRC32 value in the table header.
-
-  @param  Size   The size of the table
-  @param  Hdr    Table to update
-
-**/
-VOID
-PartitionSetCrcAltSize (
-  IN UINTN                 Size,
-  IN OUT EFI_TABLE_HEADER  *Hdr
-  )
-{
-  UINT32  Crc;
-
-  Hdr->CRC32 = 0;
-  gBS->CalculateCrc32 ((UINT8 *)Hdr, Size, &Crc);
-  Hdr->CRC32 = Crc;
-}
-
-/**
-  Checks the CRC32 value in the table header.
-
-  @param  MaxSize   Max Size limit
-  @param  Hdr       Table to check
-
-  @return TRUE      CRC Valid
-  @return FALSE     CRC Invalid
-
-**/
-BOOLEAN
-PartitionCheckCrc (
-  IN UINTN                 MaxSize,
-  IN OUT EFI_TABLE_HEADER  *Hdr
-  )
-{
-  return PartitionCheckCrcAltSize (MaxSize, Hdr->HeaderSize, Hdr);
-}
-
-/**
-  Checks the CRC32 value in the table header.
-
-  @param  MaxSize   Max Size limit
-  @param  Size      The size of the table
-  @param  Hdr       Table to check
-
-  @return TRUE    CRC Valid
-  @return FALSE   CRC Invalid
-
-**/
-BOOLEAN
-PartitionCheckCrcAltSize (
-  IN UINTN                 MaxSize,
-  IN UINTN                 Size,
-  IN OUT EFI_TABLE_HEADER  *Hdr
-  )
-{
-  UINT32      Crc;
-  UINT32      OrgCrc;
-  EFI_STATUS  Status;
-
-  Crc = 0;
-
-  if (Size == 0) {
-    //
-    // If header size is 0 CRC will pass so return FALSE here
-    //
-    return FALSE;
-  }
-
-  if ((MaxSize != 0) && (Size > MaxSize)) {
-    DEBUG ((DEBUG_ERROR, "CheckCrc32: Size > MaxSize\n"));
-    return FALSE;
-  }
-
-  //
-  // clear old crc from header
-  //
-  OrgCrc     = Hdr->CRC32;
-  Hdr->CRC32 = 0;
-
-  Status = gBS->CalculateCrc32 ((UINT8 *)Hdr, Size, &Crc);
-  if (EFI_ERROR (Status)) {
-    DEBUG ((DEBUG_ERROR, "CheckCrc32: Crc calculation failed\n"));
-    return FALSE;
-  }
-
-  //
-  // set results
-  //
-  Hdr->CRC32 = Crc;
-
-  //
-  // return status
-  //
-  DEBUG_CODE_BEGIN ();
-  if (OrgCrc != Crc) {
-    DEBUG ((DEBUG_ERROR, "CheckCrc32: Crc check failed\n"));
-  }
-
-  DEBUG_CODE_END ();
-
-  return (BOOLEAN)(OrgCrc == Crc);
 }
