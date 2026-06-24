@@ -44,6 +44,7 @@ SPDX-License-Identifier: BSD-2-Clause-Patent
 #include <Library/PeCoffLib.h>
 #include <Library/SecurityManagementLib.h>
 #include <Library/HobLib.h>
+#include <Library/GptLib.h>
 #include <Protocol/CcMeasurement.h>
 
 #include "DxeTpm2MeasureBootLibSanitization.h"
@@ -140,10 +141,8 @@ Tcg2MeasureGptTable (
   EFI_BLOCK_IO_PROTOCOL        *BlockIo;
   EFI_DISK_IO_PROTOCOL         *DiskIo;
   EFI_PARTITION_TABLE_HEADER   *PrimaryHeader;
-  EFI_PARTITION_ENTRY          *PartitionEntry;
   UINT8                        *EntryPtr;
   UINTN                        NumberOfPartition;
-  UINT32                       Index;
   UINT8                        *EventPtr;
   EFI_TCG2_EVENT               *Tcg2Event;
   EFI_CC_EVENT                 *CcEvent;
@@ -152,7 +151,7 @@ Tcg2MeasureGptTable (
   EFI_TCG2_PROTOCOL            *Tcg2Protocol;
   EFI_CC_MEASUREMENT_PROTOCOL  *CcProtocol;
   EFI_CC_MR_INDEX              MrIndex;
-  UINT32                       AllocSize;
+  GPT_CANONICAL_VIEW           GptView;
 
   if (mTcg2MeasureGptCount > 0) {
     return EFI_SUCCESS;
@@ -161,6 +160,7 @@ Tcg2MeasureGptTable (
   PrimaryHeader = NULL;
   EntryPtr      = NULL;
   EventPtr      = NULL;
+  ZeroMem (&GptView, sizeof (GptView));
 
   Tcg2Protocol = MeasureBootProtocols->Tcg2Protocol;
   CcProtocol   = MeasureBootProtocols->CcProtocol;
@@ -185,76 +185,23 @@ Tcg2MeasureGptTable (
     return EFI_UNSUPPORTED;
   }
 
-  //
-  // Read the EFI Partition Table Header
-  //
-  PrimaryHeader = (EFI_PARTITION_TABLE_HEADER *)AllocatePool (BlockIo->Media->BlockSize);
-  if (PrimaryHeader == NULL) {
-    return EFI_OUT_OF_RESOURCES;
-  }
-
-  Status = DiskIo->ReadDisk (
-                     DiskIo,
-                     BlockIo->Media->MediaId,
-                     1 * BlockIo->Media->BlockSize,
-                     BlockIo->Media->BlockSize,
-                     (UINT8 *)PrimaryHeader
-                     );
-  if (EFI_ERROR (Status) || EFI_ERROR (Tpm2SanitizeEfiPartitionTableHeader (PrimaryHeader, BlockIo))) {
-    DEBUG ((DEBUG_ERROR, "Failed to read Partition Table Header or invalid Partition Table Header!\n"));
-    FreePool (PrimaryHeader);
-    return EFI_DEVICE_ERROR;
-  }
-
-  //
-  // Read the partition entry.
-  //
-  Status = Tpm2SanitizePrimaryHeaderAllocationSize (PrimaryHeader, &AllocSize);
+  Status = GptParseAndValidate (BlockIo, DiskIo, &GptView);
   if (EFI_ERROR (Status)) {
-    FreePool (PrimaryHeader);
-    return EFI_BAD_BUFFER_SIZE;
+    DEBUG ((DEBUG_ERROR, "Failed to create canonical GPT view: %r\n", Status));
+    return (Status == EFI_VOLUME_CORRUPTED) ? EFI_SECURITY_VIOLATION : Status;
   }
 
-  EntryPtr = (UINT8 *)AllocatePool (AllocSize);
-  if (EntryPtr == NULL) {
-    FreePool (PrimaryHeader);
-    return EFI_OUT_OF_RESOURCES;
-  }
-
-  Status = DiskIo->ReadDisk (
-                     DiskIo,
-                     BlockIo->Media->MediaId,
-                     MultU64x32 (PrimaryHeader->PartitionEntryLBA, BlockIo->Media->BlockSize),
-                     AllocSize,
-                     EntryPtr
-                     );
-  if (EFI_ERROR (Status)) {
-    FreePool (PrimaryHeader);
-    FreePool (EntryPtr);
-    return EFI_DEVICE_ERROR;
-  }
-
-  //
-  // Count the valid partition
-  //
-  PartitionEntry    = (EFI_PARTITION_ENTRY *)EntryPtr;
-  NumberOfPartition = 0;
-  for (Index = 0; Index < PrimaryHeader->NumberOfPartitionEntries; Index++) {
-    if (!IsZeroGuid (&PartitionEntry->PartitionTypeGUID)) {
-      NumberOfPartition++;
-    }
-
-    PartitionEntry = (EFI_PARTITION_ENTRY *)((UINT8 *)PartitionEntry + PrimaryHeader->SizeOfPartitionEntry);
-  }
+  PrimaryHeader     = &GptView.PrimaryHeader;
+  EntryPtr          = (UINT8 *)GptView.PartitionEntries;
+  NumberOfPartition = PrimaryHeader->NumberOfPartitionEntries;
 
   //
   // Prepare Data for Measurement (CcProtocol and Tcg2Protocol)
   //
   Status = Tpm2SanitizePrimaryHeaderGptEventSize (PrimaryHeader, NumberOfPartition, &TcgEventSize);
   if (EFI_ERROR (Status)) {
-    FreePool (PrimaryHeader);
-    FreePool (EntryPtr);
-    return EFI_DEVICE_ERROR;
+    GptFreeCanonicalView (&GptView);
+    return Status;
   }
 
   EventPtr = (UINT8 *)AllocateZeroPool (TcgEventSize);
@@ -276,23 +223,15 @@ Tcg2MeasureGptTable (
   //
   CopyMem ((UINT8 *)GptData, (UINT8 *)PrimaryHeader, sizeof (EFI_PARTITION_TABLE_HEADER));
   GptData->NumberOfPartitions = NumberOfPartition;
-  //
-  // Copy the valid partition entry
-  //
-  PartitionEntry    = (EFI_PARTITION_ENTRY *)EntryPtr;
-  NumberOfPartition = 0;
-  for (Index = 0; Index < PrimaryHeader->NumberOfPartitionEntries; Index++) {
-    if (!IsZeroGuid (&PartitionEntry->PartitionTypeGUID)) {
-      CopyMem (
-        (UINT8 *)&GptData->Partitions + NumberOfPartition * PrimaryHeader->SizeOfPartitionEntry,
-        (UINT8 *)PartitionEntry,
-        PrimaryHeader->SizeOfPartitionEntry
-        );
-      NumberOfPartition++;
-    }
 
-    PartitionEntry = (EFI_PARTITION_ENTRY *)((UINT8 *)PartitionEntry + PrimaryHeader->SizeOfPartitionEntry);
-  }
+  //
+  // Measure the complete partition entry array covered by the GPT CRC.
+  //
+  CopyMem (
+    (UINT8 *)&GptData->Partitions,
+    EntryPtr,
+    GptView.PartitionEntryArraySize
+    );
 
   //
   // Only one of TCG2_PROTOCOL or CC_MEASUREMENT_PROTOCOL is exposed.
@@ -340,18 +279,11 @@ Tcg2MeasureGptTable (
   }
 
 Exit:
-  if (PrimaryHeader != NULL) {
-    FreePool (PrimaryHeader);
-  }
-
-  if (EntryPtr != NULL) {
-    FreePool (EntryPtr);
-  }
-
   if (EventPtr != NULL) {
     FreePool (EventPtr);
   }
 
+  GptFreeCanonicalView (&GptView);
   return Status;
 }
 
@@ -711,6 +643,11 @@ DxeTpm2MeasureBootHandler (
           FreePool (OrigDevicePathNode);
           OrigDevicePathNode = DuplicateDevicePath (File);
           ASSERT (OrigDevicePathNode != NULL);
+          if (EFI_ERROR (Status)) {
+            DEBUG ((DEBUG_ERROR, "GPT measurement failed: %r\n", Status));
+            goto Finish;
+          }
+
           break;
         }
       }
