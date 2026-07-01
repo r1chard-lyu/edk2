@@ -223,6 +223,7 @@
 ################################################################################
 
 !include MdePkg/MdeLibs.dsc.inc
+!include MdeModulePkg/MdeModuleLibs.dsc.inc
 
 [LibraryClasses]
   #
