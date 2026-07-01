@@ -96,6 +96,7 @@
 ################################################################################
 
 !include MdePkg/MdeLibs.dsc.inc
+!include MdeModulePkg/MdeModuleLibs.dsc.inc
 
 [LibraryClasses.common]
   PcdLib                           | MdePkg/Library/DxePcdLib/DxePcdLib.inf

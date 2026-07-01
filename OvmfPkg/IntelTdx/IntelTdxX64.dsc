@@ -109,6 +109,7 @@
 ################################################################################
 
 !include MdePkg/MdeLibs.dsc.inc
+!include MdeModulePkg/MdeModuleLibs.dsc.inc
 
 [LibraryClasses]
   PcdLib|MdePkg/Library/BasePcdLibNull/BasePcdLibNull.inf

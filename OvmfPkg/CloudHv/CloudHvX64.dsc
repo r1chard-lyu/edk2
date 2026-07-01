@@ -128,6 +128,7 @@
 ################################################################################
 
 !include MdePkg/MdeLibs.dsc.inc
+!include MdeModulePkg/MdeModuleLibs.dsc.inc
 
 [LibraryClasses]
   SmmRelocationLib|OvmfPkg/Library/SmmRelocationLib/SmmRelocationLib.inf

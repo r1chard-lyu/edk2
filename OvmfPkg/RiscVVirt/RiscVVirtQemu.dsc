@@ -100,6 +100,7 @@
 !include OvmfPkg/RiscVVirt/RiscVVirt.dsc.inc
 
 !include MdePkg/MdeLibs.dsc.inc
+!include MdeModulePkg/MdeModuleLibs.dsc.inc
 
 [LibraryClasses.common]
   PlatformSecLib|OvmfPkg/RiscVVirt/Library/PlatformSecLib/PlatformSecLib.inf
