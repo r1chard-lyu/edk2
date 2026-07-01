@@ -50,6 +50,8 @@ DEFINE FD_SIZE_IN_MB    = 3
   GCC:*_CLANGDWARF_*_DLINK_FLAGS = -z common-page-size=0x10000
   CLANGPDB:*_*_*_DLINK_FLAGS = /ALIGN:0x10000
 
+!include MdeModulePkg/MdeModuleLibs.dsc.inc
+
 [LibraryClasses.common]
 !if $(TARGET) == RELEASE
   DebugLib|MdePkg/Library/BaseDebugLibNull/BaseDebugLibNull.inf
