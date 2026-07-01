@@ -49,6 +49,7 @@
   0|DEFAULT
 
 !include MdePkg/MdeLibs.dsc.inc
+!include MdeModulePkg/MdeModuleLibs.dsc.inc
 !include RedfishPkg/Redfish.dsc.inc
 !include NetworkPkg/Network.dsc.inc
 
