@@ -21,6 +21,7 @@
   SKUID_IDENTIFIER               = DEFAULT
 
 !include MdePkg/MdeLibs.dsc.inc
+!include MdeModulePkg/MdeModuleLibs.dsc.inc
 
 [LibraryClasses]
   #
@@ -46,7 +47,6 @@
   PeCoffLib|MdePkg/Library/BasePeCoffLib/BasePeCoffLib.inf
   PeCoffGetEntryPointLib|MdePkg/Library/BasePeCoffGetEntryPointLib/BasePeCoffGetEntryPointLib.inf
   SortLib|MdeModulePkg/Library/BaseSortLib/BaseSortLib.inf
-  GptLib|MdeModulePkg/Library/GptLib/GptLib.inf
   #
   # UEFI & PI
   #
